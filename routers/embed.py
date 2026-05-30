@@ -26,6 +26,7 @@ booksegments = db["booksegments"]
 @router.post("/booksegments/embedding/{book_id}")
 async def embed_book_by_clerkId(book_id: str, request: Request):
     if not is_signed_in(request):
+        print("request booksegments/embedding", request)
         return{"error":"Unauthorized"}
     try:
         # user_books = list(
