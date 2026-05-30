@@ -1,11 +1,12 @@
+from dotenv import load_dotenv
+
+load_dotenv()
 import os
 import httpx
 from clerk_backend_api import Clerk
 from clerk_backend_api.security import authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
-from dotenv import load_dotenv
 
-load_dotenv()
 
 def is_signed_in(request: httpx.Request):
     sdk = Clerk(bearer_auth=os.getenv('CLERK_SECRET_KEY'))
