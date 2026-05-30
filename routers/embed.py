@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from bson import ObjectId
 from pymongo import UpdateOne
 from db.mongodb import db
@@ -9,6 +9,7 @@ from services.embedding import get_embedding
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from fastapi import Header, HTTPException
+from services.middlewear import is_signed_in
 
 
 
@@ -23,7 +24,9 @@ booksegments = db["booksegments"]
 
 
 @router.post("/booksegments/embedding/{book_id}")
-async def embed_book_by_clerkId(book_id: str):
+async def embed_book_by_clerkId(book_id: str, request: Request):
+    if not is_signed_in(request):
+        return{"error":"Unauthorized"}
     try:
         # user_books = list(
         #     db["books"].find(
@@ -92,7 +95,9 @@ async def embed_book_by_clerkId(book_id: str):
 
 
 @router.post("/booksegments/embed/{book_id}")
-async def embed_book_by_bookId(book_id: str):
+async def embed_book_by_bookId(book_id: str, request: Request):
+    if not is_signed_in(request):
+        return{"error":"Unauthorized"}
     try:
         clean_id = book_id.strip()
         book_object_id = ObjectId(clean_id)
