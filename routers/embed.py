@@ -22,11 +22,10 @@ router = APIRouter()
 
 booksegments = db["booksegments"]
 
-
+# create embedding by book id 
 @router.post("/booksegments/embedding/{book_id}")
 async def embed_book_by_clerkId(book_id: str, request: Request):
     if not is_signed_in(request):
-        print("request booksegments/embedding", request)
         return{"error":"Unauthorized"}
     try:
         # user_books = list(
@@ -54,12 +53,16 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
                 "suceessfully_update":0
             }
         
+        clean_id = book_id.strip()
+        book_object_id = ObjectId(clean_id)
+        
         raw_segments = list(
             db["booksegments"].find(
-                {"bookId":{"$in": book_id}},
-                {"_id":1, "content":1}
+            {"bookId": book_object_id},
+            {"_id": 1, "content": 1}
             )
         )
+        
         bulk_operations = []
         for doc in raw_segments:
             segment_id = doc["_id"]
@@ -82,6 +85,7 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
             else:
                 modified_count = 0
 
+        print(f"successfully {modified_count}")
         return {
             "message": f"successfully embedding all chunks under {book_id}",
             "total_segments_found": len(raw_segments),
@@ -95,37 +99,39 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
 
 
 
-@router.post("/booksegments/embed/{book_id}")
-async def embed_book_by_bookId(book_id: str, request: Request):
-    if not is_signed_in(request):
-        return{"error":"Unauthorized"}
-    try:
-        clean_id = book_id.strip()
-        book_object_id = ObjectId(clean_id)
+# @router.post("/booksegments/embed/{book_id}")
+# async def embed_book_by_bookId(book_id: str, request: Request):
+#     if not is_signed_in(request):
+#         # print("request booksegments/embedding", request.headers)
+#         return{"error":"Unauthorized"}
+#     try:
+#         clean_id = book_id.strip()
+#         book_object_id = ObjectId(clean_id)
 
-        raw_segments = list(
-            booksegments.find({"bookId": book_object_id})
-        )
+#         raw_segments = list(
+#             booksegments.find({"bookId": book_object_id})
+#         )
 
-        sanitized_segments = json.loads(json_util.dumps(raw_segments))
-        for doc in sanitized_segments:
-            if "$oid" in doc.get("_id", {}):
-                doc["_id"] = doc["_id"]["$oid"]
-            if "$oid" in doc.get("bookId", {}):
-                doc["bookId"] = doc["bookId"]["$oid"]
+#         sanitized_segments = json.loads(json_util.dumps(raw_segments))
+#         for doc in sanitized_segments:
+#             if "$oid" in doc.get("_id", {}):
+#                 doc["_id"] = doc["_id"]["$oid"]
+#             if "$oid" in doc.get("bookId", {}):
+#                 doc["bookId"] = doc["bookId"]["$oid"]
 
 
-        return {
-            "message": "Segments fetched",
-            "count": len(sanitized_segments),
-            "data": sanitized_segments
-        }
-    except Exception as e:
-        return {
-            "message":'Search failed', 
-            "error":str(e)
-        }
-    
+#         return {
+#             "message": "Segments fetched",
+#             "count": len(sanitized_segments),
+#             "data": sanitized_segments
+#         }
+#     except Exception as e:
+#         return {
+#             "message":'Search failed', 
+#             "error":str(e)
+#         }
+
+# create question embedding and return the answer
 class QueryRequest(BaseModel):
     content: str    # user question
     clerkId: str    # Clerk ID
@@ -133,7 +139,10 @@ class QueryRequest(BaseModel):
     authorization: str = Header(None)
     
 @router.post("/questions/embed")
-async def embed_content(request_data: QueryRequest): 
+async def embed_content(request_data: QueryRequest, request:Request): 
+    if not is_signed_in(request):
+        print("request booksegments/embedding", request.headers)
+        return{"error":"Unauthorized"}
     try:
         print("excute")
         # request_data 
