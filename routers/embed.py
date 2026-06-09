@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from fastapi import Header, HTTPException
 from services.middlewear import is_signed_in
-
+from typing import List
 
 
 MODEL = "gpt-4.1-nano"
@@ -28,25 +28,6 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
     if not is_signed_in(request):
         return{"error":"Unauthorized"}
     try:
-        # user_books = list(
-        #     db["books"].find(
-        #         {"clerkId": clerk_id.strip()},
-        #         {"_id":1}
-        #     )
-        # )
-        # if not user_books:
-        #  return{
-        #      "message":"No book found.",
-        #      "suceessfully_update":0
-        #  }
-            
-        # book_ids = [book["_id"] for book in user_books]
-        # raw_segments = list(
-        #     db["booksegments"].find(
-        #         {"bookId":{"$in": book_ids}},
-        #         {"_id":1, "content":1}
-        #     )
-        # )
         if not book_id:
             return {
                 "message":"No Auth",
@@ -76,14 +57,14 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
             bulk_operations.append(
                 UpdateOne(
                     {"_id":segment_id},
-                    {"$set":{"embedding":vector}}
+                    {"$set":{"embedding":vector, "bookIdString":str(book_id)}}
                 )
             )
-            if bulk_operations:
-                write_result = db["booksegments"].bulk_write(bulk_operations)
-                modified_count = write_result.modified_count
-            else:
-                modified_count = 0
+        if bulk_operations:
+            write_result = db["booksegments"].bulk_write(bulk_operations)
+            modified_count += write_result.modified_count
+        else:
+            modified_count = 0
 
         print(f"successfully {modified_count}")
         return {
@@ -96,7 +77,6 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
             "message":'Search failed', 
             "error":str(e)
         }
-
 
 
 # @router.post("/booksegments/embed/{book_id}")
@@ -185,6 +165,130 @@ async def embed_content(request_data: QueryRequest, request:Request):
         
         # 4. search
         search_results = list(booksegments.aggregate(pipeline))
+        if not search_results:
+            return {
+                "message":"Success",
+                "answer":"No answer could be found."
+            }
+        if search_results:
+            context_text = "\n".join([f"Source {i+1}: {doc['content']}" for i, doc in enumerate(search_results)])
+        else:
+            context_text = "No relevant reference document found."
+    
+        messages = [
+            SystemMessage(
+                content=(
+                    "You are a rigorous reading AI assistant. Please strictly answer the user's question "
+                    "based ON the provided [Reference Material]. If the provided material does not contain "
+                    "the information needed to answer the question, please politely inform the user. "
+                    "Do not make up facts or extrapolate beyond the text."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"[Reference Material]:\n{context_text}\n\n"
+                    f"[User Question]:\n{user_query}\n\n"
+                    f"Please combine the reference material above to provide a detailed, clear, and coherent answer:"
+                )
+            )
+        ]
+
+        # get answer
+        response = client.invoke(messages)
+        final_answer = response.content
+
+        return {
+            "message": "Success",
+            "answer": final_answer, # return to frontend
+            "source_segments": json.loads(json_util.dumps(search_results)) #  resource content
+        }
+    
+
+    except Exception as e:
+        return {"message": "Search failed", "error": str(e)}
+    
+    
+ # create question embedding and return the answer cross multiple books
+class QueryRequest(BaseModel):
+    content: str    # user question
+    clerkId: str    # Clerk ID
+    bookIds:list[str]     # Book IDs
+    authorization: str = Header(None)
+    
+@router.post("/questions/multiple-books/embed")
+async def embed_content(request_data: QueryRequest, request:Request): 
+    if not is_signed_in(request):
+        print("request booksegments/embedding", request.headers)
+        return{"error":"Unauthorized"}
+    try:
+        print("excute")
+        # request_data 
+        user_query = request_data.content.strip()
+        clerk_id = request_data.clerkId.strip()
+        book_ids = request_data.bookIds
+
+        # 1. convert to 1536 vector
+        query_vector = get_embedding(user_query)
+        
+        # book_object_ids = [ObjectId(book_id) for book_id in book_ids]
+        
+        print(book_ids)
+        # book_object_id = ObjectId(book_ids[0])
+
+        # docs = list(
+        #     booksegments.find(
+        #     {
+        #         "clerkId": clerk_id,
+        #         "bookId": book_object_id
+        #     }
+        #     )
+        # )
+
+        # print(len(docs))
+        # print(book_object_id)
+        # print(type(book_object_id))
+        
+        # 3. pipeline for search
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "vector_index",
+                    "path": "embedding",
+                    "queryVector": query_vector,
+                    "numCandidates": 100,
+                    "limit": 5,
+                    "filter": {
+                        "clerkId": clerk_id,
+                        "bookIdString": {
+                            "$in":book_ids
+                        }
+                        }
+                    # "filter": {
+                    #    "clerkId":clerk_id,
+                    #    "bookId":{
+                    #        "$in":book_object_ids
+                    #    }
+                    # }
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "bookId":1,
+                    "content": 1,
+                    "segmentIndex": 1,
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            }
+        ]
+
+        # 4. search
+        try:
+            search_results = list(booksegments.aggregate(pipeline))
+            print(len(search_results))
+        except Exception as e:
+            print("search failed",e)
+        
         if not search_results:
             return {
                 "message":"Success",
