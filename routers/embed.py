@@ -67,7 +67,6 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
         else:
             modified_count = 0
 
-        print(f"successfully {modified_count}")
         return {
             "message": f"successfully embedding all chunks under {book_id}",
             "total_segments_found": len(raw_segments),
@@ -122,7 +121,6 @@ class QueryRequest(BaseModel):
 @router.post("/questions/embed")
 async def embed_content(request_data: QueryRequest, request:Request): 
     if not is_signed_in(request):
-        print("request booksegments/embedding", request.headers)
         return{"error":"Unauthorized"}
     try:
         print("excute")
@@ -180,7 +178,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
             )
         else:
             context_text = "No relevant reference document found."
-        print(context_text)
         messages = [
             SystemMessage(
                 content=(
@@ -224,7 +221,6 @@ class QueryRequest(BaseModel):
 @router.post("/questions/multiple-books/embed")
 async def embed_content(request_data: QueryRequest, request:Request): 
     if not is_signed_in(request):
-        print("request booksegments/embedding", request.headers)
         return{"error":"Unauthorized"}
     try:
         print("excute")
@@ -238,7 +234,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
         
         # book_object_ids = [ObjectId(book_id) for book_id in book_ids]
         
-        print(book_ids)
         # book_object_id = ObjectId(book_ids[0])
 
         # docs = list(
@@ -291,7 +286,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
         # 4. search
         try:
             search_results = list(booksegments.aggregate(pipeline))
-            print(len(search_results))
         except Exception as e:
             print("search failed",e)
         
@@ -359,7 +353,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
 
         for source_number in source_numbers:
             doc = search_results[source_number - 1]
-            print("citations",doc)
             citations.append({
                 "source": source_number,
                 "bookId": str(doc["bookId"]),
