@@ -14,7 +14,13 @@ def is_signed_in(request: Request):
     request_state = sdk.authenticate_request(
         request,
         AuthenticateRequestOptions(
-            authorized_parties=[ os.getenv("FRONT_END_URL")]
+            authorized_parties=[ 
+                party for party in [
+                    os.getenv("FRONT_END_URL"),
+                    os.getenv("FRONT_END_DOMAIN_URL")
+                    ]
+                if party
+            ]
         )
     )
     # print("SECRET", os.getenv("CLERK_SECRET_KEY")[:15])

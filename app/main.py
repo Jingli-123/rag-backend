@@ -11,7 +11,8 @@ from routers import books
 app = FastAPI()
 
 origins = [
-    os.getenv("FRONT_END_URL")
+    os.getenv("FRONT_END_URL"),
+    os.getenv("FRONT_END_DOMAIN_URL")
 ]
 
 app.add_middleware(
