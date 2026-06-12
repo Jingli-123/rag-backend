@@ -157,13 +157,18 @@ async def embed_content(request_data: QueryRequest, request:Request):
                     "_id": 0,
                     "content": 1,
                     "segmentIndex": 1,
+                    "bookId":1,
                     "score": {"$meta": "vectorSearchScore"}
                 }
             }
         ]
         
         # 4. search
-        search_results = list(booksegments.aggregate(pipeline))
+        try:
+            search_results = list(booksegments.aggregate(pipeline))
+        except Exception as e:
+            print("search failed",e)
+        
         if not search_results:
             return {
                 "message":"Success",
@@ -178,14 +183,34 @@ async def embed_content(request_data: QueryRequest, request:Request):
             )
         else:
             context_text = "No relevant reference document found."
+    
         messages = [
             SystemMessage(
-                content=(
-                    "You are a rigorous reading AI assistant. Please strictly answer the user's question "
-                    "based ON the provided [Reference Material]. If the provided material does not contain "
-                    "the information needed to answer the question, please politely inform the user. "
-                    "Do not make up facts or extrapolate beyond the text."
-                )
+                content="""
+                    You are a rigorous reading AI assistant.
+                    Answer ONLY using the provided reference material.
+                    Whenever information from a reference source is used, you MUST cite the source number inline.
+                    Use the following format:
+                    Example:
+                    RAG improves accuracy [1].
+                    RAG systems include a data layer and a model layer [2].
+                    Managed RAG services are provided by cloud vendors [4].
+                    Every factual statement must contain one or more citations.
+                    Never omit citations.
+                    The citation format MUST be:
+                    [1]
+                    [2]
+                    [1][3]
+                    Examples:
+                    RAG improves accuracy [1].
+                    Graph RAG uses graph structures [3].
+                    Never use:
+                    Source 1
+                    Sources 1,2
+                    【1】
+                    (Source 1)
+                    Do NOT provide a separate "Sources used" section.
+                    """
             ),
             HumanMessage(
                 content=(
@@ -200,11 +225,28 @@ async def embed_content(request_data: QueryRequest, request:Request):
         response = client.invoke(messages)
         final_answer = response.content
 
+        sources = re.findall(r"\[(\d+)\]", final_answer)
+ 
+        source_numbers = sorted(set(int(s) for s in sources))
+
+        citations = []
+
+        for source_number in source_numbers:
+            doc = search_results[source_number - 1]
+            citations.append({
+                "source": source_number,
+                "bookId": str(doc["bookId"]),
+                # "title": doc["title"],
+                "segmentIndex": doc["segmentIndex"],
+                "content": doc["content"]
+            })
         return {
             "message": "Success",
             "answer": final_answer, # return to frontend
-            "source_segments": json.loads(json_util.dumps(search_results)) #  resource content
+            "source_segments": json.loads(json_util.dumps(search_results)), #  resource content
+            "citation":citations
         }
+    
     
 
     except Exception as e:
