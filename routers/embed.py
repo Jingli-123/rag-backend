@@ -12,6 +12,9 @@ from fastapi import Header, HTTPException
 from services.middlewear import is_signed_in
 from typing import List
 import re
+from fastapi.responses import StreamingResponse
+from bson import ObjectId
+from bson import json_util
 
 
 MODEL = "gpt-4.1-nano"
@@ -22,6 +25,8 @@ client = ChatOpenAI(temperature=0,model_name=MODEL)
 router = APIRouter()
 
 booksegments = db["booksegments"]
+
+
 
 # create embedding by book id 
 @router.post("/booksegments/embedding/{book_id}")
@@ -79,38 +84,6 @@ async def embed_book_by_clerkId(book_id: str, request: Request):
         }
 
 
-# @router.post("/booksegments/embed/{book_id}")
-# async def embed_book_by_bookId(book_id: str, request: Request):
-#     if not is_signed_in(request):
-#         # print("request booksegments/embedding", request.headers)
-#         return{"error":"Unauthorized"}
-#     try:
-#         clean_id = book_id.strip()
-#         book_object_id = ObjectId(clean_id)
-
-#         raw_segments = list(
-#             booksegments.find({"bookId": book_object_id})
-#         )
-
-#         sanitized_segments = json.loads(json_util.dumps(raw_segments))
-#         for doc in sanitized_segments:
-#             if "$oid" in doc.get("_id", {}):
-#                 doc["_id"] = doc["_id"]["$oid"]
-#             if "$oid" in doc.get("bookId", {}):
-#                 doc["bookId"] = doc["bookId"]["$oid"]
-
-
-#         return {
-#             "message": "Segments fetched",
-#             "count": len(sanitized_segments),
-#             "data": sanitized_segments
-#         }
-#     except Exception as e:
-#         return {
-#             "message":'Search failed', 
-#             "error":str(e)
-#         }
-
 # create question embedding and return the answer
 class QueryRequest(BaseModel):
     content: str    # user question
@@ -121,9 +94,11 @@ class QueryRequest(BaseModel):
 @router.post("/questions/embed")
 async def embed_content(request_data: QueryRequest, request:Request): 
     if not is_signed_in(request):
-        return{"error":"Unauthorized"}
+        async def error_generator():
+            yield json.dumps({"error": "Unauthorized"})
+        return StreamingResponse(error_generator(), media_type="application/json")
     try:
-        print("excute")
+        print("excute /questions/embed")
         # request_data 
         user_query = request_data.content.strip()
         clerk_id = request_data.clerkId.strip()
@@ -131,8 +106,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
 
         # 1. convert to 1536 vector
         query_vector = get_embedding(user_query)
-        
-        
         book_object_id = ObjectId(book_id)
         
         # 3. pipeline for search
@@ -164,27 +137,27 @@ async def embed_content(request_data: QueryRequest, request:Request):
         ]
         
         # 4. search
+        search_results = []
         try:
             search_results = list(booksegments.aggregate(pipeline))
         except Exception as e:
             print("search failed",e)
         
-        if not search_results:
-            return {
-                "message":"Success",
-                "answer":"No answer could be found."
-            }
-        if search_results:
-            context_text = "\n".join(
-                [
-                    f"Source {i+1} (Book {doc['bookId']}): {doc['content']}"
-                    for i, doc in enumerate(search_results)
-                ]
-            )
-        else:
-            context_text = "No relevant reference document found."
-    
-        messages = [
+        async def response_generator():
+            if not search_results:
+                yield json.dumps({
+                    "event": "done",
+                    "message": "Success",
+                    "answer": "No answer could be found."
+                })
+                return
+
+            context_text = "\n".join([
+                f"Source {i+1} (Book {doc['bookId']}): {doc['content']}"
+                for i, doc in enumerate(search_results)
+            ])
+            
+            messages = [
             SystemMessage(
                 content="""
                     You are a rigorous reading AI assistant.
@@ -220,32 +193,82 @@ async def embed_content(request_data: QueryRequest, request:Request):
                 )
             )
         ]
+            final_answer = ""
+            
+            for chunk in client.stream(messages):
+                if chunk.content:
+                    final_answer += chunk.content
 
-        # get answer
-        response = client.invoke(messages)
-        final_answer = response.content
+                    # 为了方便前端区分文本和最后的元数据，这里包一层结构（或者直接 yield chunk.content）
+                    yield json.dumps({"event": "text", "data": chunk.content}) + "\n"
+            
+            # 当大模型流结束后，提取引用并组装你的元数据
+            sources = re.findall(r"\[(\d+)\]", final_answer)
+            source_numbers = sorted(set(int(s) for s in sources))
+            citations = []
 
-        sources = re.findall(r"\[(\d+)\]", final_answer)
+            for source_number in source_numbers:
+                # 防止大模型胡说八道生成了越界的数字
+                if 0 < source_number <= len(search_results):
+                    doc = search_results[source_number - 1]
+                    citations.append({
+                        "source": source_number,
+                        "bookId": str(doc["bookId"]),
+                        "segmentIndex": doc["segmentIndex"],
+                        "content": doc["content"]
+                    })
+
+            # 将最终的结构化元数据作为流的最后一行发送
+            final_metadata = {
+                "event": "done",
+                "message": "Success",
+                "source_segments": json.loads(json_util.dumps(search_results)),
+                "citation": citations
+            }
+            yield json.dumps(final_metadata) + "\n"
+
+        # 返回 StreamingResponse 供前端实时读取
+        return StreamingResponse(response_generator(), media_type="application/x-ndjson")
+        
+        # if search_results:
+        #     context_text = "\n".join(
+        #         [
+        #             f"Source {i+1} (Book {doc['bookId']}): {doc['content']}"
+        #             for i, doc in enumerate(search_results)
+        #         ]
+        #     )
+        # else:
+        #     context_text = "No relevant reference document found."
+    
+       
+        # get answer by using stream
+        # final_answer=""
+        # for chunk in client.stream(messages):
+        #     if chunk.content:
+        #         final_answer += chunk.content
+        #         yield chunk.content
+                
+        # sources = re.findall(r"\[(\d+)\]", final_answer)
  
-        source_numbers = sorted(set(int(s) for s in sources))
+        # source_numbers = sorted(set(int(s) for s in sources))
 
-        citations = []
+        # citations = []
 
-        for source_number in source_numbers:
-            doc = search_results[source_number - 1]
-            citations.append({
-                "source": source_number,
-                "bookId": str(doc["bookId"]),
-                # "title": doc["title"],
-                "segmentIndex": doc["segmentIndex"],
-                "content": doc["content"]
-            })
-        return {
-            "message": "Success",
-            "answer": final_answer, # return to frontend
-            "source_segments": json.loads(json_util.dumps(search_results)), #  resource content
-            "citation":citations
-        }
+        # for source_number in source_numbers:
+        #     doc = search_results[source_number - 1]
+        #     citations.append({
+        #         "source": source_number,
+        #         "bookId": str(doc["bookId"]),
+        #         # "title": doc["title"],
+        #         "segmentIndex": doc["segmentIndex"],
+        #         "content": doc["content"]
+        #     })
+        # return {
+        #     "message": "Success",
+        #     "answer": final_answer, # return to frontend
+        #     "source_segments": json.loads(json_util.dumps(search_results)), #  resource content
+        #     "citation":citations
+        # }
     
     
 
@@ -265,7 +288,7 @@ async def embed_content(request_data: QueryRequest, request:Request):
     if not is_signed_in(request):
         return{"error":"Unauthorized"}
     try:
-        print("excute")
+        print("excute multiple-books/embed")
         # request_data 
         user_query = request_data.content.strip()
         clerk_id = request_data.clerkId.strip()
@@ -273,23 +296,6 @@ async def embed_content(request_data: QueryRequest, request:Request):
 
         # 1. convert to 1536 vector
         query_vector = get_embedding(user_query)
-        
-        # book_object_ids = [ObjectId(book_id) for book_id in book_ids]
-        
-        # book_object_id = ObjectId(book_ids[0])
-
-        # docs = list(
-        #     booksegments.find(
-        #     {
-        #         "clerkId": clerk_id,
-        #         "bookId": book_object_id
-        #     }
-        #     )
-        # )
-
-        # print(len(docs))
-        # print(book_object_id)
-        # print(type(book_object_id))
         
         # 3. pipeline for search
         pipeline = [
@@ -324,29 +330,27 @@ async def embed_content(request_data: QueryRequest, request:Request):
                 }
             }
         ]
-
-        # 4. search
+        
+        search_results = []
         try:
             search_results = list(booksegments.aggregate(pipeline))
         except Exception as e:
             print("search failed",e)
-        
-        if not search_results:
-            return {
-                "message":"Success",
-                "answer":"No answer could be found."
-            }
-        if search_results:
-            context_text = "\n".join(
-                [
-                    f"Source {i+1} (Book {doc['bookId']}): {doc['content']}"
-                    for i, doc in enumerate(search_results)
-                ]
-            )
-        else:
-            context_text = "No relevant reference document found."
-    
-        messages = [
+        async def response_generator():
+            if not search_results:
+                yield json.dumps({
+                    "event": "done",
+                    "message": "Success",
+                    "answer": "No answer could be found."
+                })
+                return
+
+            context_text = "\n".join([
+                f"Source {i+1} (Book {doc['bookId']}): {doc['content']}"
+                for i, doc in enumerate(search_results)
+            ])
+            
+            messages = [
             SystemMessage(
                 content="""
                     You are a rigorous reading AI assistant.
@@ -382,33 +386,42 @@ async def embed_content(request_data: QueryRequest, request:Request):
                 )
             )
         ]
+            final_answer = ""
+            
+            for chunk in client.stream(messages):
+                if chunk.content:
+                    final_answer += chunk.content
 
-        # get answer
-        response = client.invoke(messages)
-        final_answer = response.content
+                    # 为了方便前端区分文本和最后的元数据，这里包一层结构（或者直接 yield chunk.content）
+                    yield json.dumps({"event": "text", "data": chunk.content}) + "\n"
+            
+            # 当大模型流结束后，提取引用并组装你的元数据
+            sources = re.findall(r"[\[【](\d+)[\]】]", final_answer)
+            source_numbers = sorted(set(int(s) for s in sources))
+            citations = []
 
-        sources = re.findall(r"\[(\d+)\]", final_answer)
+            for source_number in source_numbers:
+                # 防止大模型胡说八道生成了越界的数字
+                if 0 < source_number <= len(search_results):
+                    doc = search_results[source_number - 1]
+                    citations.append({
+                        "source": source_number,
+                        "bookId": str(doc["bookId"]),
+                        "segmentIndex": doc["segmentIndex"],
+                        "content": doc["content"]
+                    })
 
-        source_numbers = sorted(set(int(s) for s in sources))
+            # 将最终的结构化元数据作为流的最后一行发送
+            final_metadata = {
+                "event": "done",
+                "message": "Success",
+                "source_segments": json.loads(json_util.dumps(search_results)),
+                "citation": citations
+            }
+            yield json.dumps(final_metadata) + "\n"
 
-        citations = []
-
-        for source_number in source_numbers:
-            doc = search_results[source_number - 1]
-            citations.append({
-                "source": source_number,
-                "bookId": str(doc["bookId"]),
-                # "title": doc["title"],
-                "segmentIndex": doc["segmentIndex"],
-                "content": doc["content"]
-            })
-        return {
-            "message": "Success",
-            "answer": final_answer, # return to frontend
-            "source_segments": json.loads(json_util.dumps(search_results)), #  resource content
-            "citation":citations
-        }
-    
+        # 返回 StreamingResponse 供前端实时读取
+        return StreamingResponse(response_generator(), media_type="application/x-ndjson")
 
     except Exception as e:
         return {"message": "Search failed", "error": str(e)}
