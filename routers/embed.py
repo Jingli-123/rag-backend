@@ -170,19 +170,23 @@ async def embed_content(request_data: QueryRequest, request:Request):
                     Managed RAG services are provided by cloud vendors [4].
                     Every factual statement must contain one or more citations.
                     Never omit citations.
-                    The citation format MUST be:
+                    The ONLY valid citation format is:
                     [1]
                     [2]
                     [1][3]
-                    Examples:
-                    RAG improves accuracy [1].
-                    Graph RAG uses graph structures [3].
-                    Never use:
-                    Source 1
-                    Sources 1,2
-                    【1】
+
+                    Using parentheses such as:
+
+                    (1)
                     (Source 1)
-                    Do NOT provide a separate "Sources used" section.
+
+                    or Chinese brackets such as:
+
+                    【1】
+
+                    is INVALID.
+
+                    If you cannot follow this format exactly, regenerate the answer before responding.
                     """
             ),
             HumanMessage(
@@ -363,19 +367,23 @@ async def embed_content(request_data: QueryRequest, request:Request):
                     Managed RAG services are provided by cloud vendors [4].
                     Every factual statement must contain one or more citations.
                     Never omit citations.
-                    The citation format MUST be:
+                    The ONLY valid citation format is:
                     [1]
                     [2]
                     [1][3]
-                    Examples:
-                    RAG improves accuracy [1].
-                    Graph RAG uses graph structures [3].
-                    Never use:
-                    Source 1
-                    Sources 1,2
-                    【1】
+
+                    Using parentheses such as:
+
+                    (1)
                     (Source 1)
-                    Do NOT provide a separate "Sources used" section.
+
+                    or Chinese brackets such as:
+
+                    【1】
+
+                    is INVALID.
+
+                    If you cannot follow this format exactly, regenerate the answer before responding.
                     """
             ),
             HumanMessage(
